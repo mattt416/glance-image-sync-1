@@ -21,30 +21,35 @@ import os
 import socket
 import sys
 import ConfigParser
+from glance.common import config
 from kombu import BrokerConnection
 from kombu import Exchange
 from kombu import Queue
+from oslo.config import cfg
 
-IMAGE_SYNC_CONFIG = '/etc/glance/glance-image-sync.conf'
+
 GLANCE_API_CONFIG = '/etc/glance/glance-api.conf'
+
+glance_image_sync_opts = [
+    cfg.StrOpt('api_nodes', default=None),
+    cfg.StrOpt('rsync_user', default='glance'),
+    cfg.StrOpt('sync_log_file', default='/var/log/glance/glance-image-sync.log'),
+]
+
+CONF = cfg.CONF
+CONF.register_opts(glance_image_sync_opts)
+CONF.register_cli_opt(cfg.StrOpt('action', default='both'))
 
 
 def _read_api_nodes_config():
     image_sync_cfg = {}
-    section = 'DEFAULT'
-    default_log = '/var/log/glance/glance-image-sync.log'
-    config = ConfigParser.RawConfigParser({'rsync_user': 'glance',
-                                           'log_file': default_log})
 
-    if config.read(IMAGE_SYNC_CONFIG):
-        tmp_api_nodes = config.get(section, 'api_nodes')
-        image_sync_cfg['rsync_user'] = config.get(section, 'rsync_user')
-        image_sync_cfg['log_file'] = config.get(section, 'log_file')
-        image_sync_cfg['api_nodes'] = tmp_api_nodes.replace(' ', '').split(',')
+    tmp_api_nodes = CONF.api_nodes
+    image_sync_cfg['rsync_user'] = CONF.rsync_user
+    image_sync_cfg['sync_log_file'] = CONF.log_file
+    image_sync_cfg['api_nodes'] = tmp_api_nodes.replace(' ', '').split(',')
 
-        return image_sync_cfg
-    else:
-        return None
+    return image_sync_cfg
 
 
 def _read_glance_api_config():
@@ -192,17 +197,14 @@ def _sync_images(glance_api_cfg, image_sync_cfg, conn, exchange):
 
 
 def main(args):
-    if len(args) == 2:
-        cmd = args[1]
-    else:
-        sys.exit(1)
-
+    config.parse_args()
+    cmd = CONF.action
     if cmd in ('duplicate-notifications', 'sync-images', 'both'):
         glance_api_cfg = _read_glance_api_config()
         image_sync_cfg = _read_api_nodes_config()
 
         if glance_api_cfg and image_sync_cfg:
-            logging.basicConfig(filename=image_sync_cfg['log_file'],
+            logging.basicConfig(filename=image_sync_cfg['sync_log_file'],
                                 format='%(asctime)s %(message)s',
                                 level=logging.INFO)
             conn, exchange = _connect(glance_api_cfg)
