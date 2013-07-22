@@ -16,12 +16,11 @@
 #
 
 import glob
-import logging
 import os
 import socket
 import sys
-import ConfigParser
 from glance.common import config
+from glance.openstack.common import log
 from kombu import BrokerConnection
 from kombu import Exchange
 from kombu import Queue
@@ -29,11 +28,13 @@ from oslo.config import cfg
 
 
 GLANCE_API_CONFIG = '/etc/glance/glance-api.conf'
+LOG = log.getLogger(__name__)
 
 glance_image_sync_opts = [
     cfg.StrOpt('api_nodes', default=None),
     cfg.StrOpt('rsync_user', default='glance'),
-    cfg.StrOpt('sync_log_file', default='/var/log/glance/glance-image-sync.log'),
+    cfg.StrOpt('sync_log_file',
+               default='/var/log/glance/glance-image-sync.log'),
 ]
 
 CONF = cfg.CONF
@@ -146,9 +147,9 @@ def _duplicate_notifications(glance_api_cfg, image_sync_cfg, conn, exchange):
                                        content_type='application/json')
             exchange.publish(msg_new, routing_key)
 
-        logging.info("%s %s %s" % (msg.payload['event_type'],
-                                   msg.payload['payload']['id'],
-                                   msg.payload['publisher_id']))
+        LOG.info("%s %s %s" % (msg.payload['event_type'],
+                               msg.payload['payload']['id'],
+                               msg.payload['publisher_id']))
         msg.ack()
 
 
@@ -196,17 +197,15 @@ def _sync_images(glance_api_cfg, image_sync_cfg, conn, exchange):
             msg.ack()
 
 
-def main(args):
+def main():
     config.parse_args()
     cmd = CONF.action
+    log.setup('rcb')
     if cmd in ('duplicate-notifications', 'sync-images', 'both'):
         glance_api_cfg = _read_glance_api_config()
         image_sync_cfg = _read_api_nodes_config()
 
         if glance_api_cfg and image_sync_cfg:
-            logging.basicConfig(filename=image_sync_cfg['sync_log_file'],
-                                format='%(asctime)s %(message)s',
-                                level=logging.INFO)
             conn, exchange = _connect(glance_api_cfg)
         else:
             sys.exit(1)
@@ -224,7 +223,3 @@ def main(args):
         _sync_images(glance_api_cfg, image_sync_cfg, conn, exchange)
 
     conn.close()
-
-
-if __name__ == '__main__':
-    main(sys.argv)
