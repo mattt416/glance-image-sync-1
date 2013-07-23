@@ -16,6 +16,7 @@
 #
 
 import glob
+import lockfile
 import os
 import socket
 import sys
@@ -25,7 +26,6 @@ from glance.openstack.common import log
 from oslo.config import cfg
 
 
-GLANCE_API_CONFIG = '/etc/glance/glance-api.conf'
 LOG = log.getLogger(__name__)
 
 glance_image_sync_opts = [
@@ -180,6 +180,15 @@ def _sync_images(glance_cfg, conn, exchange):
 
 def main():
     config.parse_args()
+
+    # Lock AFTER arguments have been parsed, otherwise we'll end up with
+    # stale lock files.
+    lock = lockfile.FileLock("/var/run/glance-image-sync")
+    try:
+        lock.acquire(timeout=5)
+    except lockfile.LockTimeout:
+        sys.exit(1)
+
     cmd = CONF.action
     log.setup('rcb')
     if cmd in ('duplicate-notifications', 'sync-images', 'both'):
@@ -188,8 +197,10 @@ def main():
         if glance_cfg:
             conn, exchange = _connect(glance_cfg)
         else:
+            lock.release()
             sys.exit(1)
     else:
+        lock.release()
         sys.exit(1)
 
     if cmd == 'duplicate-notifications':
@@ -201,3 +212,4 @@ def main():
         _sync_images(glance_cfg, conn, exchange)
 
     conn.close()
+    lock.release()
