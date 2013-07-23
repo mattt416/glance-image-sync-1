@@ -13,7 +13,7 @@ setup(
     version = "0.1.0",
     author = "Matt Thompson",
     author_email = "matt.thompson@rackspace.co.uk",
-    description = ("Used to pull excessive amounts of data from CORE"),
+    description = ("RCB OpenStack python tools"),
     license = "BSD",
     keywords = "example documentation tutorial",
     url = "http://github.com/rcbops/glance-image-sync",

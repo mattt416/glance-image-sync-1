@@ -21,8 +21,13 @@ import os
 import socket
 import sys
 from glance.common import config
-from glance.notifier import notify_kombu
 from glance.openstack.common import log
+# We import notify_kombu and filesystem for the CONF options only.
+from glance.notifier import notify_kombu
+from glance.store import filesystem
+from kombu import BrokerConnection
+from kombu import Exchange
+from kombu import Queue
 from oslo.config import cfg
 
 
@@ -42,7 +47,6 @@ CONF.register_cli_opt(cfg.StrOpt('action', default='both'))
 
 def _build_config_dict():
     config = {}
-
     if CONF.notifier_strategy == 'rabbit':
         tmp_api_nodes = CONF.api_nodes
         config['rsync_user'] = CONF.rsync_user
