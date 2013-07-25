@@ -17,6 +17,7 @@
 
 import glob
 import lockfile
+import multiprocessing
 import os
 import socket
 import sys
@@ -33,7 +34,7 @@ from oslo.config import cfg
 
 LOG = log.getLogger(__name__)
 
-glance_image_sync_opts = [
+conf_file_opts = [
     cfg.StrOpt('api_nodes', default=None),
     cfg.StrOpt('rsync_user', default='glance'),
     cfg.StrOpt('sync_log_file',
@@ -41,8 +42,8 @@ glance_image_sync_opts = [
 ]
 
 CONF = cfg.CONF
-CONF.register_opts(glance_image_sync_opts)
-CONF.register_cli_opt(cfg.StrOpt('action', default='both'))
+CONF.register_opts(conf_file_opts)
+CONF.register_cli_opt(cfg.BoolOpt('daemon', default=False))
 
 
 def _build_config_dict():
@@ -104,7 +105,8 @@ def _shorten_hostname(node):
         return node
 
 
-def _duplicate_notifications(glance_cfg, conn, exchange):
+def _duplicate_notifications(glance_cfg):
+    conn, exchange = _connect(glance_cfg)
     routing_key = '%s.info' % glance_cfg['topic']
     notification_queue = _declare_queue(glance_cfg,
                                         routing_key,
@@ -114,31 +116,37 @@ def _duplicate_notifications(glance_cfg, conn, exchange):
     while True:
         msg = notification_queue.get()
 
-        if msg is None:
+        if msg:
+            # Skip over non-glance notifications.
+            if msg.payload['event_type'] not in ('image.update', 'image.delete'):
+                continue
+    
+            for node in glance_cfg['api_nodes']:
+                routing_key = 'glance_image_sync.%s.info' % _shorten_hostname(node)
+                node_queue = _declare_queue(glance_cfg,
+                                            routing_key,
+                                            conn,
+                                            exchange)
+    
+                msg_new = exchange.Message(msg.body,
+                                           content_type='application/json')
+                exchange.publish(msg_new, routing_key)
+    
+            LOG.info("%s %s %s" % (msg.payload['event_type'],
+                                   msg.payload['payload']['id'],
+                                   msg.payload['publisher_id']))
+            print("%s %s %s" % (msg.payload['event_type'],
+                                msg.payload['payload']['id'],
+                                msg.payload['publisher_id']))
+            msg.ack()
+        elif not CONF.daemon:
             break
 
-        # Skip over non-glance notifications.
-        if msg.payload['event_type'] not in ('image.update', 'image.delete'):
-            continue
-
-        for node in glance_cfg['api_nodes']:
-            routing_key = 'glance_image_sync.%s.info' % _shorten_hostname(node)
-            node_queue = _declare_queue(glance_cfg,
-                                        routing_key,
-                                        conn,
-                                        exchange)
-
-            msg_new = exchange.Message(msg.body,
-                                       content_type='application/json')
-            exchange.publish(msg_new, routing_key)
-
-        LOG.info("%s %s %s" % (msg.payload['event_type'],
-                               msg.payload['payload']['id'],
-                               msg.payload['publisher_id']))
-        msg.ack()
+    conn.close()
 
 
-def _sync_images(glance_cfg, conn, exchange):
+def _sync_images(glance_cfg):
+    conn, exchange = _connect(glance_cfg)
     hostname = socket.gethostname()
 
     routing_key = 'glance_image_sync.%s.info' % _shorten_hostname(hostname)
@@ -147,39 +155,41 @@ def _sync_images(glance_cfg, conn, exchange):
     while True:
         msg = queue.get()
 
-        if msg is None:
+        if msg:
+            image_filename = "%s/%s" % (glance_cfg['datadir'],
+                                        msg.payload['payload']['id'])
+    
+            # An image create generates a create and update notification, so we
+            # just pass over the create notification and use the update one
+            # instead.
+            # Also, we don't send the update notification to the node which
+            # processed the request (publisher_id) since that node will already
+            # have the image; we do send deletes to all nodes though since the
+            # node which receives the delete request may not have the completed
+            # image yet.
+            if (msg.payload['event_type'] == 'image.update' and
+                    msg.payload['publisher_id'] != hostname):
+                print 'Update detected on %s ...' % (image_filename)
+                os.system("rsync -a -e 'ssh -o StrictHostKeyChecking=no' "
+                          "%s@%s:%s %s" % (glance_cfg['rsync_user'],
+                                           msg.payload['publisher_id'],
+                                           image_filename, image_filename))
+                msg.ack()
+            elif msg.payload['event_type'] == 'image.delete':
+                print 'Delete detected on %s ...' % (image_filename)
+                # Don't delete file if it's still being copied (we're looking
+                # for the temporary file as it's being copied by rsync here).
+                image_glob = '%s/.*%s*' % (glance_cfg['datadir'],
+                                           msg.payload['payload']['id'])
+                if not glob.glob(image_glob):
+                    os.system('rm %s' % (image_filename))
+                    msg.ack()
+            else:
+                msg.ack()
+        elif not CONF.daemon:
             break
 
-        image_filename = "%s/%s" % (glance_cfg['datadir'],
-                                    msg.payload['payload']['id'])
-
-        # An image create generates a create and update notification, so we
-        # just pass over the create notification and use the update one
-        # instead.
-        # Also, we don't send the update notification to the node which
-        # processed the request (publisher_id) since that node will already
-        # have the image; we do send deletes to all nodes though since the
-        # node which receives the delete request may not have the completed
-        # image yet.
-        if (msg.payload['event_type'] == 'image.update' and
-                msg.payload['publisher_id'] != hostname):
-            print 'Update detected on %s ...' % (image_filename)
-            os.system("rsync -a -e 'ssh -o StrictHostKeyChecking=no' "
-                      "%s@%s:%s %s" % (glance_cfg['rsync_user'],
-                                       msg.payload['publisher_id'],
-                                       image_filename, image_filename))
-            msg.ack()
-        elif msg.payload['event_type'] == 'image.delete':
-            print 'Delete detected on %s ...' % (image_filename)
-            # Don't delete file if it's still being copied (we're looking
-            # for the temporary file as it's being copied by rsync here).
-            image_glob = '%s/.*%s*' % (glance_cfg['datadir'],
-                                       msg.payload['payload']['id'])
-            if not glob.glob(image_glob):
-                os.system('rm %s' % (image_filename))
-                msg.ack()
-        else:
-            msg.ack()
+    conn.close()
 
 
 def main():
@@ -188,32 +198,29 @@ def main():
     # Lock AFTER arguments have been parsed, otherwise we'll end up with
     # stale lock files.
     lock = lockfile.FileLock("/var/run/glance-image-sync")
-    try:
-        lock.acquire(timeout=5)
-    except lockfile.LockTimeout:
+    if lock.is_locked():
         sys.exit(1)
 
-    cmd = CONF.action
-    log.setup('rcb')
-    if cmd in ('duplicate-notifications', 'sync-images', 'both'):
+    with lock:
+        log.setup('rcb')
         glance_cfg = _build_config_dict()
 
-        if glance_cfg:
-            conn, exchange = _connect(glance_cfg)
-        else:
-            lock.release()
+        if not glance_cfg:
             sys.exit(1)
-    else:
-        lock.release()
-        sys.exit(1)
 
-    if cmd == 'duplicate-notifications':
-        _duplicate_notifications(glance_cfg, conn, exchange)
-    elif cmd == 'sync-images':
-        _sync_images(glance_cfg, conn, exchange)
-    elif cmd == 'both':
-        _duplicate_notifications(glance_cfg, conn, exchange)
-        _sync_images(glance_cfg, conn, exchange)
-
-    conn.close()
-    lock.release()
+        if CONF.daemon:
+            try:
+                p1 = multiprocessing.Process(target=_duplicate_notifications,
+                                             args=(glance_cfg,))
+                p1.start()
+                p2 = multiprocessing.Process(target=_sync_images,
+                                             args=(glance_cfg,))
+                p2.start()
+                p1.join()
+                p2.join()
+            except KeyboardInterrupt:
+                p1.terminate()
+                p2.terminate()
+        else:
+            _sync_images(glance_cfg)
+            _duplicate_notifications(glance_cfg)
