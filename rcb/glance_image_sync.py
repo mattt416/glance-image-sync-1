@@ -19,8 +19,7 @@ import glob
 import lockfile
 import multiprocessing
 import os
-import socket
-import sys
+import ConfigParser
 from glance.common import config
 from glance.openstack.common import log
 # We import notify_kombu and filesystem for the CONF options only.
@@ -29,7 +28,11 @@ from glance.store import filesystem
 from kombu import BrokerConnection
 from kombu import Exchange
 from kombu import Queue
+from os import system
 from oslo.config import cfg
+from socket import gethostname
+from sys import exit
+from time import sleep
 
 
 LOG = log.getLogger(__name__)
@@ -37,8 +40,8 @@ LOG = log.getLogger(__name__)
 conf_file_opts = [
     cfg.StrOpt('api_nodes', default=None),
     cfg.StrOpt('rsync_user', default='glance'),
-    cfg.StrOpt('sync_log_file',
-               default='/var/log/glance/glance-image-sync.log'),
+    cfg.StrOpt('lock_file', default='/var/run/glance-image-sync'),
+    cfg.StrOpt('glance_api_conf', default='/etc/glance/glance-api.conf')
 ]
 
 CONF = cfg.CONF
@@ -47,23 +50,35 @@ CONF.register_cli_opt(cfg.BoolOpt('daemon', default=False))
 
 
 def _build_config_dict():
-    config = {}
-    if CONF.notifier_strategy == 'rabbit':
-        tmp_api_nodes = CONF.api_nodes
-        config['rsync_user'] = CONF.rsync_user
-        config['sync_log_file'] = CONF.log_file
-        config['api_nodes'] = tmp_api_nodes.replace(' ', '').split(',')
+    # TODO (mattt): find a better way to read these configuration options
+    # from CONF.glance_api_conf
+    glance_cfg = {}
+    section = 'DEFAULT'
+    config = ConfigParser.RawConfigParser()
 
-        config['host'] = CONF.rabbit_host
-        config['port'] = CONF.rabbit_port
-        config['use_ssl'] = CONF.rabbit_use_ssl
-        config['userid'] = CONF.rabbit_userid
-        config['password'] = CONF.rabbit_password
-        config['virtual_host'] = CONF.rabbit_virtual_host
-        config['exchange'] = CONF.rabbit_notification_exchange
-        config['topic'] = CONF.rabbit_notification_topic
-        config['datadir'] = CONF.filesystem_store_datadir
-        return config
+    if config.read(CONF.glance_api_conf):
+        if config.get(section, 'notifier_strategy') == 'rabbit':
+            tmp_api_nodes = CONF.api_nodes
+            glance_cfg['api_nodes'] = tmp_api_nodes.replace(' ', '').split(',')
+            glance_cfg['rsync_user'] = CONF.rsync_user
+
+            glance_cfg['host'] = config.get(section, 'rabbit_host')
+            glance_cfg['port'] = config.get(section, 'rabbit_port')
+            glance_cfg['use_ssl'] = config.get(section, 'rabbit_use_ssl')
+            glance_cfg['userid'] = config.get(section, 'rabbit_userid')
+            glance_cfg['password'] = config.get(section, 'rabbit_password')
+            glance_cfg['virtual_host'] = config.get(section,
+                                                    'rabbit_virtual_host')
+            option = 'rabbit_notification_exchange'
+            glance_cfg['exchange'] = config.get(section, option)
+            glance_cfg['topic'] = config.get(section,
+                                             'rabbit_notification_topic')
+            glance_cfg['datadir'] = config.get(section,
+                                               'filesystem_store_datadir')
+
+            return glance_cfg
+        else:
+            return None
     else:
         return None
 
@@ -120,34 +135,34 @@ def _duplicate_notifications(glance_cfg):
             # Skip over non-glance notifications.
             if msg.payload['event_type'] not in ('image.update', 'image.delete'):
                 continue
-    
+
             for node in glance_cfg['api_nodes']:
-                routing_key = 'glance_image_sync.%s.info' % _shorten_hostname(node)
+                routing_key = ('glance_image_sync.%s.info' %
+                               _shorten_hostname(node))
                 node_queue = _declare_queue(glance_cfg,
                                             routing_key,
                                             conn,
                                             exchange)
-    
+
                 msg_new = exchange.Message(msg.body,
                                            content_type='application/json')
                 exchange.publish(msg_new, routing_key)
-    
+
             LOG.info("%s %s %s" % (msg.payload['event_type'],
                                    msg.payload['payload']['id'],
                                    msg.payload['publisher_id']))
-            print("%s %s %s" % (msg.payload['event_type'],
-                                msg.payload['payload']['id'],
-                                msg.payload['publisher_id']))
             msg.ack()
         elif not CONF.daemon:
             break
+
+        sleep(1)
 
     conn.close()
 
 
 def _sync_images(glance_cfg):
     conn, exchange = _connect(glance_cfg)
-    hostname = socket.gethostname()
+    hostname = gethostname()
 
     routing_key = 'glance_image_sync.%s.info' % _shorten_hostname(hostname)
     queue = _declare_queue(glance_cfg, routing_key, conn, exchange)
@@ -158,7 +173,7 @@ def _sync_images(glance_cfg):
         if msg:
             image_filename = "%s/%s" % (glance_cfg['datadir'],
                                         msg.payload['payload']['id'])
-    
+
             # An image create generates a create and update notification, so we
             # just pass over the create notification and use the update one
             # instead.
@@ -170,10 +185,10 @@ def _sync_images(glance_cfg):
             if (msg.payload['event_type'] == 'image.update' and
                     msg.payload['publisher_id'] != hostname):
                 print 'Update detected on %s ...' % (image_filename)
-                os.system("rsync -a -e 'ssh -o StrictHostKeyChecking=no' "
-                          "%s@%s:%s %s" % (glance_cfg['rsync_user'],
-                                           msg.payload['publisher_id'],
-                                           image_filename, image_filename))
+                system("rsync -a -e 'ssh -o StrictHostKeyChecking=no' "
+                       "%s@%s:%s %s" % (glance_cfg['rsync_user'],
+                                        msg.payload['publisher_id'],
+                                        image_filename, image_filename))
                 msg.ack()
             elif msg.payload['event_type'] == 'image.delete':
                 print 'Delete detected on %s ...' % (image_filename)
@@ -182,12 +197,14 @@ def _sync_images(glance_cfg):
                 image_glob = '%s/.*%s*' % (glance_cfg['datadir'],
                                            msg.payload['payload']['id'])
                 if not glob.glob(image_glob):
-                    os.system('rm %s' % (image_filename))
+                    system('rm %s' % (image_filename))
                     msg.ack()
             else:
                 msg.ack()
         elif not CONF.daemon:
             break
+
+        sleep(1)
 
     conn.close()
 
@@ -197,16 +214,16 @@ def main():
 
     # Lock AFTER arguments have been parsed, otherwise we'll end up with
     # stale lock files.
-    lock = lockfile.FileLock("/var/run/glance-image-sync")
+    lock = lockfile.FileLock(CONF.lock_file)
     if lock.is_locked():
-        sys.exit(1)
+        exit(1)
 
     with lock:
         log.setup('rcb')
         glance_cfg = _build_config_dict()
 
         if not glance_cfg:
-            sys.exit(1)
+            exit(1)
 
         if CONF.daemon:
             try:
