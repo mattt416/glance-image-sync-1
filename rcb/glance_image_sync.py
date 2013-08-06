@@ -19,6 +19,7 @@ import glob
 import lockfile
 import multiprocessing
 import os
+import signal
 import ConfigParser
 from glance.common import config
 from glance.openstack.common import log
@@ -210,34 +211,40 @@ def _sync_images(glance_cfg):
 
 
 def main():
+    def cleanup(signum, frame):
+        p1.terminate()
+        p2.terminate()
+
     config.parse_args()
 
-    # Lock AFTER arguments have been parsed, otherwise we'll end up with
-    # stale lock files.
-    lock = lockfile.FileLock(CONF.lock_file)
-    if lock.is_locked():
+    log.setup('rcb')
+    glance_cfg = _build_config_dict()
+
+    if not glance_cfg:
         exit(1)
 
-    with lock:
-        log.setup('rcb')
-        glance_cfg = _build_config_dict()
+    if CONF.daemon:
+        # If we run as a daemon, we assume we're running via start-stop-daemon
+        # or similar
+        p1 = multiprocessing.Process(target=_duplicate_notifications,
+                                     args=(glance_cfg,))
+        p2 = multiprocessing.Process(target=_sync_images,
+                                     args=(glance_cfg,))
+        p1.start()
+        p2.start()
 
-        if not glance_cfg:
+        signal.signal(signal.SIGTERM, cleanup)
+        signal.signal(signal.SIGINT, cleanup)
+
+        p1.join()
+        p2.join()
+    else:
+        # Lock AFTER arguments have been parsed, otherwise we'll end up with
+        # stale lock files.
+        lock = lockfile.FileLock(CONF.lock_file)
+        if lock.is_locked():
             exit(1)
-
-        if CONF.daemon:
-            try:
-                p1 = multiprocessing.Process(target=_duplicate_notifications,
-                                             args=(glance_cfg,))
-                p1.start()
-                p2 = multiprocessing.Process(target=_sync_images,
-                                             args=(glance_cfg,))
-                p2.start()
-                p1.join()
-                p2.join()
-            except KeyboardInterrupt:
-                p1.terminate()
-                p2.terminate()
-        else:
+    
+        with lock:
             _sync_images(glance_cfg)
             _duplicate_notifications(glance_cfg)
