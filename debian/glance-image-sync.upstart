@@ -1,0 +1,9 @@
+description "Nova compute worker"
+author "Soren Hansen <soren@linux2go.dk>"
+
+start on runlevel [2345]
+stop on runlevel [!2345]
+
+#respawn
+
+exec start-stop-daemon --make-pidfile --pidfile /var/run/glance-image-sync.pid --start --chuid root --startas /usr/bin/glance-image-sync -- --daemon

@@ -11,6 +11,7 @@ XS-Python-Version: >= 2.6
 Package: python-rcb
 Architecture: all
 Depends: ${python:Depends}, ${misc:Depends},
-  python-glance
-Description: greet user
- python-rcb greets the user, or the world.
+  python-glance,
+  python-oslo.config
+Description: RCB OpenStack python tools
+ RCB OpenStack python tools.
