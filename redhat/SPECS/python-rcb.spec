@@ -39,6 +39,10 @@ install -m 755 $RPM_SOURCE_DIR/openstack-glance-image-sync.init $RPM_BUILD_ROOT/
 rm -rf %{buildroot}
 
 
+%post
+chkconfig --add openstack-glance-image-sync
+
+
 %files
 %defattr(-,root,root,-)
 /usr/bin/glance-image-sync
