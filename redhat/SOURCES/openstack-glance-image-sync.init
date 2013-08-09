@@ -30,7 +30,7 @@ start() {
     [ -x $exec ] || exit 5
     [ -f $config ] || exit 6
     echo -n $"Starting $prog: "
-    daemon --user root --pidfile $pidfile "$exec --config-file $config --daemon --debug --verbose &>/dev/null & echo \$! > $pidfile"
+    daemon --user glance --pidfile $pidfile "$exec --config-file $config --daemon --debug --verbose &>/dev/null & echo \$! > $pidfile"
     retval=$?
     echo
     [ $retval -eq 0 ] && touch $lockfile

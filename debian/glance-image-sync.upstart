@@ -11,5 +11,5 @@ script
 
 	test "$ENABLED" != "0" || exit 0
 
-	exec start-stop-daemon --make-pidfile --pidfile /var/run/glance-image-sync.pid --start --chuid root --startas /usr/bin/glance-image-sync -- --daemon
+	exec start-stop-daemon --make-pidfile --pidfile /var/run/glance-image-sync.pid --start --chuid glance --startas /usr/bin/glance-image-sync -- --daemon
 end script
