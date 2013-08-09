@@ -16,7 +16,7 @@ Requires:	python-glance
 Requires:	python-oslo-config
 
 %description
-RCB OpenStack python tools
+RCB OpenStack python tools for private cloud installations.
 
 
 %prep
@@ -54,5 +54,5 @@ chkconfig --add openstack-glance-image-sync
 
 
 %changelog
-* Wed Aug 07 2013 Matt Thompson (test@test.com) - 0.1.0
+* Wed Aug 07 2013 Matt Thompson (mattt@defunct.ca) - 0.1.0
 - Initial build

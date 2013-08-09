@@ -12,7 +12,7 @@ setup(
     name = "rcb",
     version = "0.1.0",
     author = "Matt Thompson",
-    author_email = "matt.thompson@rackspace.co.uk",
+    author_email = "mattt@defunct.ca",
     description = ("RCB OpenStack python tools"),
     license = "BSD",
     keywords = "example documentation tutorial",
