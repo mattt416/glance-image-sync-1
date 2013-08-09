@@ -41,7 +41,7 @@ LOG = log.getLogger(__name__)
 conf_file_opts = [
     cfg.StrOpt('api_nodes', default=None),
     cfg.StrOpt('rsync_user', default='glance'),
-    cfg.StrOpt('lock_file', default='/var/run/glance-image-sync'),
+    cfg.StrOpt('lock_file', default='/var/lock/glance-image-sync/glance-image-sync'),
     cfg.StrOpt('glance_api_conf', default='/etc/glance/glance-api.conf')
 ]
 
