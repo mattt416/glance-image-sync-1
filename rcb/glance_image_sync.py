@@ -32,7 +32,7 @@ from kombu import Queue
 from os import system
 from oslo.config import cfg
 from socket import gethostname
-from sys import exit
+from sys import exit as sysexit
 from time import sleep
 
 
@@ -221,7 +221,7 @@ def main():
     glance_cfg = _build_config_dict()
 
     if not glance_cfg:
-        exit(1)
+        sysexit(1)
 
     if CONF.daemon:
         # If we run as a daemon, we assume we're running via start-stop-daemon
@@ -243,7 +243,7 @@ def main():
         # stale lock files.
         lock = lockfile.FileLock(CONF.lock_file)
         if lock.is_locked():
-            exit(1)
+            sysexit(1)
     
         with lock:
             _sync_images(glance_cfg)
